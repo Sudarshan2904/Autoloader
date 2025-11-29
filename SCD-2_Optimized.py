@@ -181,10 +181,12 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ## Step 6: Optimized SCD-2 MERGE (Single Operation)
-# MAGIC This single MERGE statement handles:
-# MAGIC - **WHEN MATCHED**: Closes old records when data has changed (sets effective_to and is_current = FALSE)
-# MAGIC - **WHEN NOT MATCHED**: Inserts new records (handles both new customers and changed records that were just closed)
+# MAGIC ## Step 6: Optimized SCD-2 MERGE (Two-Step Operation)
+# MAGIC This optimized approach uses two Spark-SQL operations:
+# MAGIC - **Step 1 (MERGE)**: Closes old records when data has changed (sets effective_to and is_current = FALSE)
+# MAGIC - **Step 2 (INSERT)**: Inserts new/changed records (handles both new customers and records that were just closed)
+# MAGIC 
+# MAGIC Note: A single MERGE cannot insert a new version of a record that was just matched and updated. This two-step approach is the most efficient way to handle SCD-2 in Spark SQL.
 
 # COMMAND ----------
 
@@ -212,7 +214,7 @@
 # MAGIC USE CATALOG ${var.catalog};
 # MAGIC USE SCHEMA ${var.schema};
 # MAGIC
-# MAGIC -- OPTIMIZED: Single MERGE statement handles both closing old records and inserting new/changed records
+# MAGIC -- Step 1: Close old records when data has changed
 # MAGIC MERGE INTO dim_customer_scd2 AS tgt
 # MAGIC USING customer_stage_current_batch AS src
 # MAGIC ON src.customer_id = tgt.customer_id AND tgt.is_current = TRUE
@@ -220,35 +222,46 @@
 # MAGIC   -- Close the old record when data has changed
 # MAGIC   UPDATE SET
 # MAGIC     tgt.effective_to = current_date(),
-# MAGIC     tgt.is_current = FALSE
-# MAGIC WHEN NOT MATCHED THEN
-# MAGIC   -- Insert new records (handles both new customers and changed records that were just closed)
-# MAGIC   INSERT (
-# MAGIC     customer_id,
-# MAGIC     customer_name,
-# MAGIC     email,
-# MAGIC     city,
-# MAGIC     state,
-# MAGIC     postal_code,
-# MAGIC     phone,
-# MAGIC     effective_from,
-# MAGIC     effective_to,
-# MAGIC     is_current,
-# MAGIC     record_hash
-# MAGIC   )
-# MAGIC   VALUES (
-# MAGIC     src.customer_id,
-# MAGIC     src.customer_name,
-# MAGIC     src.email,
-# MAGIC     src.city,
-# MAGIC     src.state,
-# MAGIC     src.postal_code,
-# MAGIC     src.phone,
-# MAGIC     src.effective_from,
-# MAGIC     CAST(NULL AS DATE),
-# MAGIC     TRUE,
-# MAGIC     src.record_hash
-# MAGIC );
+# MAGIC     tgt.is_current = FALSE;
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC USE CATALOG ${var.catalog};
+# MAGIC USE SCHEMA ${var.schema};
+# MAGIC
+# MAGIC -- Step 2: Insert new/changed records (new customers and records that were just closed)
+# MAGIC INSERT INTO dim_customer_scd2 (
+# MAGIC   customer_id,
+# MAGIC   customer_name,
+# MAGIC   email,
+# MAGIC   city,
+# MAGIC   state,
+# MAGIC   postal_code,
+# MAGIC   phone,
+# MAGIC   effective_from,
+# MAGIC   effective_to,
+# MAGIC   is_current,
+# MAGIC   record_hash
+# MAGIC )
+# MAGIC SELECT
+# MAGIC   src.customer_id,
+# MAGIC   src.customer_name,
+# MAGIC   src.email,
+# MAGIC   src.city,
+# MAGIC   src.state,
+# MAGIC   src.postal_code,
+# MAGIC   src.phone,
+# MAGIC   src.effective_from,
+# MAGIC   CAST(NULL AS DATE) AS effective_to,
+# MAGIC   TRUE AS is_current,
+# MAGIC   src.record_hash
+# MAGIC FROM customer_stage_current_batch AS src
+# MAGIC LEFT JOIN dim_customer_scd2 AS tgt
+# MAGIC   ON src.customer_id = tgt.customer_id 
+# MAGIC   AND tgt.is_current = TRUE
+# MAGIC   AND tgt.record_hash = src.record_hash
+# MAGIC WHERE tgt.customer_id IS NULL;  -- Insert if no current record with same hash exists
 
 # COMMAND ----------
 
@@ -318,9 +331,12 @@
 # MAGIC %md
 # MAGIC ## Summary
 # MAGIC 
-# MAGIC The optimized implementation uses a **single MERGE statement** that:
-# MAGIC 1. Closes old records when data changes (WHEN MATCHED)
-# MAGIC 2. Inserts new/changed records in one operation (WHEN NOT MATCHED)
+# MAGIC The optimized implementation uses **two Spark-SQL operations**:
+# MAGIC 1. **MERGE**: Closes old records when data changes (WHEN MATCHED)
+# MAGIC 2. **INSERT**: Inserts new/changed records using efficient LEFT JOIN logic
 # MAGIC 
-# MAGIC This eliminates the need for a separate INSERT statement and improves performance.
+# MAGIC This approach correctly handles all SCD-2 scenarios:
+# MAGIC - New customers are inserted
+# MAGIC - Changed customers have old records closed and new records inserted
+# MAGIC - Unchanged customers remain as-is
 
