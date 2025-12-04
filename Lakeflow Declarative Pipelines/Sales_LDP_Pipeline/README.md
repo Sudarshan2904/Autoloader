@@ -3,6 +3,7 @@
 This folder defines all source code for the 'Sales_LDP_Pipeline' pipeline:
 
 - `explorations`: Ad-hoc notebooks used to explore the data processed by this pipeline.
+- ## Under, explorations- Basic_checks.py file has all scenario specific data load (table creation, inserts, etc.)
 - `transformations`: All dataset definitions and transformations.
 - `utilities`: Utility functions and Python modules used in this pipeline.
 
